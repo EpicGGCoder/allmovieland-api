@@ -81,14 +81,10 @@ async function loadDetail(url, sessionId) {
   const res = await fetch(url, {
     headers: {
       "User-Agent": UA,
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       "Accept-Language": "en-US,en;q=0.9",
       Referer: BASE_URL + "/",
       Cookie: `PHPSESSID=${sessionId}`,
-      "Sec-Fetch-Dest": "document",
-      "Sec-Fetch-Mode": "navigate",
-      "Sec-Fetch-Site": "same-origin",
-      "Upgrade-Insecure-Requests": "1",
     },
     redirect: "follow",
   });
@@ -141,20 +137,14 @@ async function loadDetail(url, sessionId) {
 async function getStreamPayload(embedLink, refererUrl, playerDomain, sessionId) {
   const baseUrl = getBaseUrl(embedLink);
 
+  // CRITICAL: The Referer header must be the allmovieland.one detail page URL.
+  // Without it, the player CDN returns 404.
   const res = await fetch(embedLink, {
     headers: {
       "User-Agent": UA,
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       "Accept-Language": "en-US,en;q=0.9",
-      "Accept-Encoding": "gzip, deflate, br",
       Referer: refererUrl,
-      "Sec-Fetch-Dest": "iframe",
-      "Sec-Fetch-Mode": "navigate",
-      "Sec-Fetch-Site": "cross-site",
-      "Sec-Ch-Ua": '"Not/A)Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"',
-      "Sec-Ch-Ua-Mobile": "?0",
-      "Sec-Ch-Ua-Platform": '"Windows"',
-      "Upgrade-Insecure-Requests": "1",
     },
     redirect: "follow",
   });
@@ -578,7 +568,7 @@ app.get("/debug/:tmdbId", async (req, res) => {
     steps[4].embedLink = embedLink;
 
     const embedRes = await fetch(embedLink, {
-      headers: { "User-Agent": UA, Referer: best.href, Cookie: `PHPSESSID=${sessionId}` },
+      headers: { "User-Agent": UA, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", Referer: best.href },
       redirect: "follow",
     });
     const embedHtml = await embedRes.text();
