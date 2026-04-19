@@ -145,17 +145,61 @@ async function getStreamPayload(embedLink, refererUrl, playerDomain, sessionId) 
   });
   const html = await res.text();
 
-  // Extract HDVBPlayer config
+  // Extract player config JSON from embed page
+  // Pattern 1: let p3 = {...}; ... new HDVBPlayer(p3)  (variable assignment, then HDVBPlayer call)
+  // Pattern 2: var pl = new HDVBPlayer({...})           (inline JSON in HDVBPlayer call)
+  // Pattern 3: fallback to last script tag JSON extraction (Kotlin's method)
   let config;
-  const hdvbMatch = html.match(/new\s+HDVBPlayer\(\s*(\{[\s\S]*?\})\s*\)/);
-  if (hdvbMatch) {
-    try {
-      config = JSON.parse(hdvbMatch[1]);
-    } catch {
-      throw new Error("Failed to parse HDVBPlayer config");
+
+  // Pattern 2 first: new HDVBPlayer({...}) with inline JSON
+  // This is the most reliable pattern - the JSON is between the parens
+  const hdvbInlineMatch = html.match(/new\s+HDVBPlayer\(\s*(\{[\s\S]*?"key"\s*:)/);
+  if (hdvbInlineMatch) {
+    // Find the matching closing brace
+    const startIdx = html.indexOf("{", html.indexOf("new HDVBPlayer"));
+    if (startIdx !== -1) {
+      let depth = 0;
+      let endIdx = startIdx;
+      for (let i = startIdx; i < html.length; i++) {
+        if (html[i] === "{") depth++;
+        if (html[i] === "}") depth--;
+        if (depth === 0) { endIdx = i; break; }
+      }
+      const jsonStr = html.substring(startIdx, endIdx + 1);
+      try {
+        config = JSON.parse(jsonStr);
+      } catch {
+        // continue to next pattern
+      }
     }
-  } else {
-    // Fallback: last script tag
+  }
+
+  if (!config) {
+    // Pattern 1: let/var/const p3 = {...}; variable assignment
+    const varMatch = html.match(/(?:let|var|const)\s+\w+\s*=\s*(\{[\s\S]*?"key"\s*:)/);
+    if (varMatch) {
+      // Find the full JSON by matching braces from the start of the object
+      const startIdx = html.indexOf("{", html.match(/(?:let|var|const)\s+\w+\s*=\s*/).index);
+      if (startIdx !== -1) {
+        let depth = 0;
+        let endIdx = startIdx;
+        for (let i = startIdx; i < html.length; i++) {
+          if (html[i] === "{") depth++;
+          if (html[i] === "}") depth--;
+          if (depth === 0) { endIdx = i; break; }
+        }
+        const jsonStr = html.substring(startIdx, endIdx + 1);
+        try {
+          config = JSON.parse(jsonStr);
+        } catch {
+          // continue to fallback
+        }
+      }
+    }
+  }
+
+  if (!config) {
+    // Fallback: extract JSON from last script tag (Kotlin's method)
     const scriptTags = [];
     const scriptRegex = /<script[^>]*>([\s\S]*?)<\/script>/gi;
     let sm;
@@ -169,21 +213,37 @@ async function getStreamPayload(embedLink, refererUrl, playerDomain, sessionId) 
     try {
       config = JSON.parse(lastScript.substring(start, end + 1));
     } catch {
-      throw new Error("Failed to parse player config from fallback");
+      throw new Error("Failed to parse player config from any pattern");
     }
   }
 
   const tokenKey = config.key || "";
-  const jsonfile = config.file.startsWith("http") ? config.file : baseUrl + config.file;
 
-  // POST to file URL with CSRF token
-  const postRes = await fetch(jsonfile, {
+  // Extract the file ID from config.file
+  // config.file may be:
+  //   - Full URL: "https://cdn.example.com/playlist/FILEID.txt"
+  //   - Relative: "/playlist/FILEID.txt"
+  //   - Bare ID:  "FILEID.txt"
+  // We need just the file ID portion for the playerDomain endpoint.
+  let fileId;
+  if (config.file.startsWith("http")) {
+    const parts = config.file.split("/playlist/");
+    fileId = parts.length > 1 ? parts[1] : config.file;
+  } else if (config.file.startsWith("/playlist/")) {
+    fileId = config.file.substring("/playlist/".length);
+  } else {
+    fileId = config.file;
+  }
+
+  // POST to playerDomain/playlist/{fileId} with CSRF token
+  const playlistUrl = `${playerDomain}/playlist/${fileId}`;
+  const postRes = await fetch(playlistUrl, {
     method: "POST",
     headers: {
       "User-Agent": UA,
-      Referer: embedLink,
+      "Referer": BASE_URL + "/",
       "X-CSRF-TOKEN": tokenKey,
-      "Content-Type": "application/x-www-form-urlencoded",
+      "Origin": playerDomain,
     },
     redirect: "follow",
   });
