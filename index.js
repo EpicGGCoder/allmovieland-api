@@ -506,12 +506,86 @@ app.get("/", (req, res) => {
     endpoints: {
       movie: "/movie/{tmdb_id}",
       tv: "/tv/{tmdb_id}/{season}/{episode}",
+      debug: "/debug/{tmdb_id}?type=movie|tv",
     },
     examples: {
       movie: "/movie/912649",
       tv: "/tv/71446/1/1",
     },
   });
+});
+
+app.get("/debug/:tmdbId", async (req, res) => {
+  const steps = [];
+  try {
+    const tmdbId = parseInt(req.params.tmdbId);
+    const type = req.query.type || "movie";
+
+    // Step 1: TMDB
+    steps.push({ step: "tmdb", status: "running" });
+    const tmdbInfo = await getTmdbInfo(tmdbId, type);
+    steps[0].status = "ok";
+    steps[0].title = tmdbInfo.title;
+    steps[0].year = tmdbInfo.year;
+
+    // Step 2: Session
+    steps.push({ step: "session", status: "running" });
+    const sessionId = await getSession();
+    steps[1].status = sessionId ? "ok" : "failed";
+    steps[1].sessionId = sessionId ? sessionId.substring(0, 8) + "..." : "none";
+
+    // Step 3: Search
+    steps.push({ step: "search", status: "running" });
+    const results = await search(tmdbInfo.title, sessionId);
+    steps[2].status = results.length ? "ok" : "failed";
+    steps[2].resultCount = results.length;
+    steps[2].results = results.slice(0, 3).map(r => ({ title: r.title, href: r.href, type: r.type }));
+
+    if (!results.length) {
+      steps[2].status = "no_results";
+      return res.json({ steps, error: "No search results" });
+    }
+
+    const best = results.find(r => r.title.toLowerCase().includes(tmdbInfo.title.toLowerCase())) || results[0];
+
+    // Step 4: Detail
+    steps.push({ step: "detail", status: "running" });
+    const detail = await loadDetail(best.href, sessionId);
+    steps[3].status = "ok";
+    steps[3].title = detail.title;
+    steps[3].playerDomain = detail.playerDomain;
+    steps[3].streamId = detail.streamId;
+    steps[3].type = detail.type;
+
+    // Step 5: Embed
+    steps.push({ step: "embed", status: "running" });
+    const embedLink = `${detail.playerDomain}/play/${detail.streamId}`;
+    steps[4].embedLink = embedLink;
+
+    const embedRes = await fetch(embedLink, {
+      headers: { "User-Agent": UA, Referer: best.href, Cookie: `PHPSESSID=${sessionId}` },
+      redirect: "follow",
+    });
+    const embedHtml = await embedRes.text();
+    steps[4].embedLength = embedHtml.length;
+    steps[4].hasHDVBPlayer = embedHtml.includes("HDVBPlayer");
+    steps[4].hasNewHDVB = /new\s+HDVBPlayer\(\s*\{/.test(embedHtml);
+    steps[4].hasVarAssign = /(?:let|var|const)\s+\w+\s*=\s*\{/.test(embedHtml);
+    steps[4].embedSnippet = embedHtml.substring(embedHtml.indexOf("HDVBPlayer") - 50, embedHtml.indexOf("HDVBPlayer") + 200);
+
+    // Step 6: Get stream payload
+    steps.push({ step: "streamPayload", status: "running" });
+    const payload = await getStreamPayload(embedLink, best.href, detail.playerDomain, sessionId);
+    steps[5].status = payload.items.length ? "ok" : "empty";
+    steps[5].itemsCount = payload.items.length;
+    steps[5].rawLength = payload.raw.length;
+    steps[5].rawPreview = payload.raw.substring(0, 300);
+    steps[5].tokenKey = payload.tokenKey ? payload.tokenKey.substring(0, 15) + "..." : "none";
+
+    res.json({ steps });
+  } catch (e) {
+    res.json({ steps, error: e.message, stack: e.stack?.split("\n").slice(0, 5) });
+  }
 });
 
 app.get("/movie/:tmdbId", async (req, res) => {
