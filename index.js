@@ -587,6 +587,38 @@ app.get("/debug/:tmdbId", async (req, res) => {
     steps[5].rawPreview = payload.raw.substring(0, 300);
     steps[5].tokenKey = payload.tokenKey ? payload.tokenKey.substring(0, 15) + "..." : "none";
 
+    // Step 7: Test if player domain root and playlist endpoints work
+    steps.push({ step: "cdnTest", status: "running" });
+    try {
+      // Test player domain root
+      const rootRes = await fetch(detail.playerDomain + "/", {
+        headers: { "User-Agent": UA },
+        redirect: "follow",
+      });
+      const rootText = await rootRes.text();
+      steps[6].rootStatus = rootRes.status;
+      steps[6].rootSnippet = rootText.substring(0, 100);
+
+      // Test embed page without Referer
+      const noRefRes = await fetch(embedLink, {
+        headers: { "User-Agent": UA },
+        redirect: "follow",
+      });
+      steps[6].noRefererStatus = noRefRes.status;
+
+      // Test embed page WITH Referer
+      const withRefRes = await fetch(embedLink, {
+        headers: { "User-Agent": UA, Referer: best.href },
+        redirect: "follow",
+      });
+      const withRefText = await withRefRes.text();
+      steps[6].withRefererStatus = withRefRes.status;
+      steps[6].withRefererLength = withRefText.length;
+      steps[6].withRefererHasHDVB = withRefText.includes("HDVBPlayer");
+    } catch (e) {
+      steps[6].error = e.message;
+    }
+
     res.json({ steps });
   } catch (e) {
     res.json({ steps, error: e.message, stack: e.stack?.split("\n").slice(0, 5) });
